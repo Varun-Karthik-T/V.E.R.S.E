@@ -11,3 +11,4 @@ anyhow = "1"
 ort = { version = "2.0.0-rc.10" }
 serde = { version = "1", features = ["derive"] }
 bincode = "1"
+sha2 = "0.10"

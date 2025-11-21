@@ -135,6 +135,104 @@
 // // //     println!("✅ Proof saved to proof.json");
 // // // }
 
+// workssssssssssssssssssss
+
+
+
+
+
+
+
+
+
+// use risc0_zkvm::{default_prover, ExecutorEnv};
+// use risc0_zkvm::serde::from_slice;
+// use serde_json;
+// use std::fs;
+// use std::io;
+// use std::time::Instant;
+
+// fn main() {
+//     println!("Enter path to guest ELF file:");
+//     let mut path = String::new();
+//     io::stdin().read_line(&mut path).unwrap();
+//     let guest_elf_path = path.trim();
+//     let guest_elf = fs::read(guest_elf_path).expect("Failed to read guest ELF");
+
+//     println!("Optimized? (0 = float, 1 = fixed):");
+//     let mut buffer = String::new();
+//     io::stdin().read_line(&mut buffer).unwrap();
+//     let use_opt_flag: u32 = buffer.trim().parse().expect("Enter 0 or 1");
+
+//     println!("Select model (1=linear, 2=multiple, 3=poly, 4=logistic):");
+//     buffer.clear();
+//     io::stdin().read_line(&mut buffer).unwrap();
+//     let model_type: u32 = buffer.trim().parse().expect("Enter 1..4");
+
+//     println!("Enter weights (comma-separated):");
+//     buffer.clear();
+//     io::stdin().read_line(&mut buffer).unwrap();
+//     let weights: Vec<f32> = buffer.trim()
+//         .split(',')
+//         .filter(|s| !s.trim().is_empty())
+//         .map(|s| s.trim().parse::<f32>().expect("Invalid weight"))
+//         .collect();
+
+//     // Validate weight counts
+//     match model_type {
+//         1 => if weights.len() != 1 { panic!("Model 1 expects 1 weight"); },
+//         2 | 4 => if weights.len() != 3 { panic!("Model 2/4 expect 3 weights"); },
+//         3 => if weights.is_empty() { panic!("Polynomial expects >=1 coeff"); },
+//         _ => panic!("Unknown model"),
+//     }
+
+//     println!("Enter bias (b) (use dot, e.g. 2.0):");
+//     buffer.clear();
+//     io::stdin().read_line(&mut buffer).unwrap();
+//     let b: f32 = buffer.trim().parse().expect("Invalid bias");
+
+    // let env = ExecutorEnv::builder()
+    //     .write(&use_opt_flag).unwrap()
+//         .write(&model_type).unwrap()
+//         .write(&weights).unwrap()
+//         .write(&b).unwrap()
+//         .build().unwrap();
+
+//     let prover = default_prover();
+
+//     println!("Running proof…");
+//     let start = Instant::now();
+//     let prove_info = prover.prove(env, &guest_elf).expect("Prove failed");
+//     let elapsed = start.elapsed();
+
+//     let receipt = prove_info.receipt;
+//     let output: Vec<(f32, f32)> = from_slice(receipt.journal.bytes.as_slice()).expect("Failed decode journal");
+
+//     println!("\n=== Results (first 5) ===");
+//     for (i, (p, t)) in output.iter().enumerate().take(5) {
+//         println!("{}: pred={:.6}, true={:.6}", i, p, t);
+//     }
+
+//     println!("\n=== Benchmark ===");
+//     // println!("Dataset size inside guest (edit guest DATASET_SIZE): {}", DATASET_SIZE);
+//     println!("Prove time: {:?}", elapsed);
+//     println!("Cycle count: {}", prove_info.stats.total_cycles);
+//     println!("Journal size: {} bytes", receipt.journal.bytes.len());
+
+//     let proof_json = serde_json::to_string(&receipt).expect("serialize failed");
+//     println!("Proof size: {} bytes", proof_json.len());
+//     fs::write("proof.json", &proof_json).expect("failed write proof");
+//     println!("✅ Proof saved to proof.json");
+// }
+
+
+
+
+
+
+
+
+
 
 use risc0_zkvm::{default_prover, ExecutorEnv};
 use risc0_zkvm::serde::from_slice;
@@ -155,65 +253,122 @@ fn main() {
     io::stdin().read_line(&mut buffer).unwrap();
     let use_opt_flag: u32 = buffer.trim().parse().expect("Enter 0 or 1");
 
-    println!("Select model (1=linear, 2=multiple, 3=poly, 4=logistic):");
+    println!("Select model (1=linear, 2=multiple, 3=poly, 4=logistic, 5=decision tree):");
     buffer.clear();
     io::stdin().read_line(&mut buffer).unwrap();
-    let model_type: u32 = buffer.trim().parse().expect("Enter 1..4");
+    let model_type: u32 = buffer.trim().parse().expect("Enter 1..5");
 
-    println!("Enter weights (comma-separated):");
-    buffer.clear();
-    io::stdin().read_line(&mut buffer).unwrap();
-    let weights: Vec<f32> = buffer.trim()
-        .split(',')
-        .filter(|s| !s.trim().is_empty())
-        .map(|s| s.trim().parse::<f32>().expect("Invalid weight"))
-        .collect();
+    // Variables to be passed to guest
+    let mut weights: Vec<f32> = Vec::new();
+    let mut b: f32 = 0.0;
+    let mut tree_path = String::new();
+    let mut tree_json = String::new();
 
-    // Validate weight counts
-    match model_type {
-        1 => if weights.len() != 1 { panic!("Model 1 expects 1 weight"); },
-        2 | 4 => if weights.len() != 3 { panic!("Model 2/4 expect 3 weights"); },
-        3 => if weights.is_empty() { panic!("Polynomial expects >=1 coeff"); },
-        _ => panic!("Unknown model"),
+    if model_type != 5 {
+        println!("Enter weights (comma-separated):");
+        buffer.clear();
+        io::stdin().read_line(&mut buffer).unwrap();
+        weights = buffer
+            .trim()
+            .split(',')
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.trim().parse::<f32>().expect("Invalid weight"))
+            .collect();
+
+        match model_type {
+            1 => if weights.len() != 1 { panic!("Model 1 expects 1 weight"); },
+            2 | 4 => if weights.len() != 3 { panic!("Model 2/4 expect 3 weights"); },
+            3 => if weights.is_empty() { panic!("Polynomial expects >=1 coeff"); },
+            _ => panic!("Unknown model"),
+        }
+
+        println!("Enter bias (b) (use dot, e.g. 2.0):");
+        buffer.clear();
+        io::stdin().read_line(&mut buffer).unwrap();
+        b = buffer.trim().parse().expect("Invalid bias");
+    } else {
+        println!("Enter path to Decision Tree JSON file (default: tree.json):");
+        buffer.clear();
+        io::stdin().read_line(&mut buffer).unwrap();
+        tree_path = buffer.trim().to_string();
+        if tree_path.is_empty() {
+            tree_path = "tree.json".to_string();
+        }
+
+        println!("[host] Using tree JSON path: {}", tree_path);
+        let read_start = Instant::now();
+        tree_json = fs::read_to_string(&tree_path).expect("Failed to read tree.json");
+        println!(
+            "[host] Loaded JSON ({} bytes) in {:.2?}",
+            tree_json.len(),
+            read_start.elapsed()
+        );
+        let preview: String = tree_json.chars().take(120).collect();
+        println!(
+            "[host] JSON preview: {}{}",
+            preview,
+            if tree_json.len() > 120 { "..." } else { "" }
+        );
     }
 
-    println!("Enter bias (b) (use dot, e.g. 2.0):");
-    buffer.clear();
-    io::stdin().read_line(&mut buffer).unwrap();
-    let b: f32 = buffer.trim().parse().expect("Invalid bias");
+    println!("\n[host] Building zkVM executor environment...");
+    let mut builder = ExecutorEnv::builder();
+    builder.write(&use_opt_flag).unwrap();
+    builder.write(&model_type).unwrap();
 
-    let env = ExecutorEnv::builder()
-        .write(&use_opt_flag).unwrap()
-        .write(&model_type).unwrap()
-        .write(&weights).unwrap()
-        .write(&b).unwrap()
-        .build().unwrap();
+    if model_type == 5 {
+        builder.write(&tree_path).unwrap();
+        builder.write(&tree_json).unwrap();
+    } else {
+        builder.write(&weights).unwrap();
+        builder.write(&b).unwrap();
+    }
+
+    let env = builder.build().unwrap();
+
 
     let prover = default_prover();
-
-    println!("Running proof…");
+    println!("[host] Starting proof generation...");
     let start = Instant::now();
     let prove_info = prover.prove(env, &guest_elf).expect("Prove failed");
     let elapsed = start.elapsed();
 
     let receipt = prove_info.receipt;
-    let output: Vec<(f32, f32)> = from_slice(receipt.journal.bytes.as_slice()).expect("Failed decode journal");
 
-    println!("\n=== Results (first 5) ===");
-    for (i, (p, t)) in output.iter().enumerate().take(5) {
-        println!("{}: pred={:.6}, true={:.6}", i, p, t);
+    if model_type == 5 {
+        println!("[host] Decoding journal to predictions...");
+        let predictions: Vec<(Vec<f64>, u32)> = from_slice(receipt.journal.bytes.as_slice()).expect("Failed decode journal");
+        println!("[host] Decoded {} predictions", predictions.len());
+
+        println!("\nSample | PredClass | Prob    | Expected");
+        println!("---------------------------------------");
+        for (i, (probs, expected)) in predictions.iter().enumerate().take(5) {
+            let (pred_idx, pred_p) = probs
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .map(|(idx, p)| (idx, *p))
+                .unwrap_or((usize::MAX, f64::NAN));
+            println!("{:<6} | {:<9} | {:<6.3} | {}", i, pred_idx, pred_p, expected);
+        }
+    } else {
+        let output: Vec<(f32, f32)> = from_slice(receipt.journal.bytes.as_slice()).expect("Failed decode journal");
+        println!("\n=== Results (first 5) ===");
+        for (i, (p, t)) in output.iter().enumerate().take(5) {
+            println!("{}: pred={:.6}, true={:.6}", i, p, t);
+        }
     }
 
     println!("\n=== Benchmark ===");
-    // println!("Dataset size inside guest (edit guest DATASET_SIZE): {}", DATASET_SIZE);
     println!("Prove time: {:?}", elapsed);
     println!("Cycle count: {}", prove_info.stats.total_cycles);
     println!("Journal size: {} bytes", receipt.journal.bytes.len());
 
     let proof_json = serde_json::to_string(&receipt).expect("serialize failed");
-    println!("Proof size: {} bytes", proof_json.len());
     fs::write("proof.json", &proof_json).expect("failed write proof");
     println!("✅ Proof saved to proof.json");
+    fs::write("combined_outputs.json", &proof_json).expect("Write failed");
+    println!("📄 Combined outputs saved to combined_outputs.json");
 }
 
 

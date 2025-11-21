@@ -75,6 +75,127 @@ fn load_auth() -> Result<AuthStore, String> {
     Ok(auth)
 }
 
+// Load a CSV file into a 2D array (Vec<Vec<f32>>). Skips empty lines and optional header row.
+fn load_csv_as_2d(path: &str) -> Result<Vec<Vec<f32>>, String> {
+    let text = fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read CSV file ({}): {}", path, e))?;
+    let mut rows: Vec<Vec<f32>> = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() { continue; }
+        if i == 0 {
+            // If first line has any non-float token, treat it as header and skip
+            let toks: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+            if toks.iter().any(|t| t.parse::<f32>().is_err()) {
+                continue;
+            }
+        }
+        let mut row: Vec<f32> = Vec::new();
+        for tok in line.split(',').map(|s| s.trim()) {
+            match tok.parse::<f32>() {
+                Ok(v) => row.push(v),
+                Err(e) => return Err(format!("Line {}: failed to parse '{}' as f32: {}", i + 1, tok, e)),
+            }
+        }
+        if !row.is_empty() { rows.push(row); }
+    }
+    if rows.is_empty() { return Err("CSV contained no numeric rows".into()); }
+    Ok(rows)
+}
+
+// Generate Rust code for get_dataset() from 2D rows (last column is label)
+fn generate_get_dataset_code(rows: &[Vec<f32>]) -> Result<String, String> {
+    if rows.is_empty() { return Err("No rows to generate dataset".into()); }
+    let mut feat_len: Option<usize> = None;
+    let mut items: Vec<String> = Vec::with_capacity(rows.len());
+    for (i, r) in rows.iter().enumerate() {
+        if r.len() < 2 { return Err(format!("Row {} has fewer than 2 columns", i + 1)); }
+        let flen = r.len() - 1;
+        if let Some(expected) = feat_len {
+            if expected != flen { return Err(format!("Inconsistent columns at row {}: expected {} features before label, got {}", i + 1, expected, flen)); }
+        } else {
+            feat_len = Some(flen);
+        }
+        let (features, label) = r.split_at(flen);
+        let feats_str = features
+            .iter()
+            .map(|v| {
+                let s = v.to_string();
+                if s.contains('.') { s } else { format!("{}.0", s) }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let lbl_s = {
+            let s = label[0].to_string();
+            if s.contains('.') { s } else { format!("{}.0", s) }
+        };
+        items.push(format!("        (vec![{}], {}),", feats_str, lbl_s));
+    }
+    let body = items.join("\n");
+    let code = format!(
+        "fn get_dataset() -> Vec<(Vec<f32>, f32)> {{\n    vec![\n{}\n    ]\n}}\n",
+        body
+    );
+    Ok(code)
+}
+
+// Replace the get_dataset() function implementation in a template file.
+fn write_dataset_to_template(template_path: &str, rows: &[Vec<f32>]) -> Result<(), String> {
+    let mut content = fs::read_to_string(template_path)
+        .map_err(|e| format!("Failed to read template ({}): {}", template_path, e))?;
+    let new_fn = generate_get_dataset_code(rows)?;
+
+    // Find existing get_dataset signature line index boundaries and replace up to the next lone '}'
+    let lines: Vec<&str> = content.lines().collect();
+    let mut start_idx: Option<usize> = None;
+    for (i, line) in lines.iter().enumerate() {
+        if line.trim_start().starts_with("fn get_dataset() -> Vec<(Vec<f32>, f32)>") {
+            start_idx = Some(i);
+            break;
+        }
+    }
+    let start = start_idx.ok_or("Failed to find get_dataset() in template")?;
+    // Find the closing brace line for this function
+    let mut end = None;
+    for i in start+1..lines.len() {
+        if lines[i].trim() == "}" {
+            end = Some(i);
+            break;
+        }
+    }
+    let end = end.ok_or("Failed to find end of get_dataset() in template")?;
+
+    // Rebuild file: lines before start, then new_fn, then lines after end
+    let before = lines[..start].join("\n");
+    let after = if end + 1 < lines.len() { lines[end+1..].join("\n") } else { String::new() };
+    let mut new_content = String::new();
+    if !before.is_empty() { new_content.push_str(&before); new_content.push('\n'); }
+    new_content.push_str(&new_fn);
+    if !after.is_empty() { new_content.push_str(&after); new_content.push('\n'); }
+
+    fs::write(template_path, new_content)
+        .map_err(|e| format!("Failed to write template ({}): {}", template_path, e))?
+        ;
+    Ok(())
+}
+
+// Copy the updated template into the actual guest code location.
+// Expects guest_dir to be the workspace root of the guest (containing `methods/guest/src/main.rs`).
+fn copy_template_to_guest(template_path: &str, guest_dir: &str) -> Result<PathBuf, String> {
+    let content = fs::read_to_string(template_path)
+        .map_err(|e| format!("Failed to read template ({}): {}", template_path, e))?;
+    let guest_main = PathBuf::from(guest_dir).join("methods/guest/src/main.rs");
+    if !guest_main.exists() {
+        return Err(format!(
+            "Guest main not found at {} (dir was '{}'). Ensure the path is correct.",
+            guest_main.display(), guest_dir
+        ));
+    }
+    fs::write(&guest_main, content)
+        .map_err(|e| format!("Failed to write guest main ({}): {}", guest_main.display(), e))?;
+    Ok(guest_main)
+}
+
 fn pretty_print_models(body: &str) {
     match serde_json::from_str::<Value>(body) {
         Ok(Value::Array(items)) => {
@@ -288,6 +409,13 @@ fn main() {
                         .help("Path to an already exported ELF file (skips autodetect)")
                         .value_name("FILE")
                         .required(false),
+                )
+                .arg(
+                    Arg::new("dataset")
+                        .long("dataset")
+                        .help("Path to a dataset CSV file to load as a 2D array")
+                        .value_name("CSV_PATH")
+                        .required(false),
                 ),
         )
         .subcommand(
@@ -347,6 +475,13 @@ fn main() {
                         .help("Path to the Zk-host workspace directory where guest-elf will be saved")
                         .value_name("DIR")
                         .default_value("../Zk-host"),
+                )
+                .arg(
+                    Arg::new("dataset")
+                        .long("dataset")
+                        .help("Path to a dataset CSV file to include with the request")
+                        .value_name("CSV_PATH")
+                        .required(false),
                 ),
         )
         .subcommand(
@@ -418,7 +553,6 @@ fn main() {
 
     match matches.subcommand() {
         Some(("request", sub_m)) => {
-            // If --list is provided, list all requests placed by the verifier
             if sub_m.get_flag("list") {
                 let auth = match load_auth() { Ok(a) => a, Err(e) => { eprintln!("{}", e); std::process::exit(1); } };
                 let url = std::env::var("VERSE_API_URL").unwrap_or_else(|_| "http://127.0.0.1:8000".to_string());
@@ -454,6 +588,45 @@ fn main() {
                 .unwrap_or("ZK-guest");
 
             let explicit_elf = sub_m.get_one::<String>("elf").map(String::as_str);
+            let dataset_path = sub_m.get_one::<String>("dataset").map(String::as_str);
+
+            // If dataset path provided, load it now as 2D array
+            if let Some(csv_path) = dataset_path {
+                match load_csv_as_2d(csv_path) {
+                    Ok(rows) => {
+                        let cols = rows.get(0).map(|r| r.len()).unwrap_or(0);
+                        println!(
+                            "Loaded dataset: {} rows x {} cols from {}",
+                            rows.len(),
+                            cols,
+                            csv_path
+                        );
+                        // Optional preview
+                        let preview = rows.iter().take(3);
+                        for (i, r) in preview.enumerate() {
+                            println!("  row {:>3}: {:?}", i, r);
+                        }
+                        // Write into template get_dataset() so guest can embed the dataset
+                        let template_path = {
+                            let base = env!("CARGO_MANIFEST_DIR");
+                            format!("{}/template.txt", base)
+                        };
+                        match write_dataset_to_template(&template_path, &rows) {
+                            Ok(_) => println!("Updated {} with get_dataset() from the loaded CSV.", template_path),
+                            Err(e) => { eprintln!("Failed to update template: {}", e); std::process::exit(1); }
+                        }
+                        // Copy the updated template into the guest code so it will be used on build/run
+                        match copy_template_to_guest(&template_path, dir) {
+                            Ok(guest_main) => println!("Copied template into guest: {}", guest_main.display()),
+                            Err(e) => { eprintln!("Failed to copy template into guest: {}", e); std::process::exit(1); }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to load dataset CSV: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
 
             if explicit_elf.is_none() {
                 println!("Running `cargo run --release` in: {}", dir);
@@ -493,46 +666,46 @@ fn main() {
                 }
             };
 
-            let auth = match load_auth() {
-                Ok(a) => a,
-                Err(e) => { eprintln!("{}", e); std::process::exit(1); }
-            };
-            let url = std::env::var("VERSE_API_URL").unwrap_or_else(|_| "http://127.0.0.1:8000".to_string());
-            let endpoint = format!("{}/api/model/validation-request", url.trim_end_matches('/'));
-            println!("Uploading validation request for model {} with ELF: {}", model_id, elf_path.display());
+            // let auth = match load_auth() {
+            //     Ok(a) => a,
+            //     Err(e) => { eprintln!("{}", e); std::process::exit(1); }
+            // };
+            // let url = std::env::var("VERSE_API_URL").unwrap_or_else(|_| "http://127.0.0.1:8000".to_string());
+            // let endpoint = format!("{}/api/model/validation-request", url.trim_end_matches('/'));
+            // println!("Uploading validation request for model {} with ELF: {}", model_id, elf_path.display());
 
-            let client = reqwest::blocking::Client::new();
-            let file_name = elf_path.file_name().and_then(|s| s.to_str()).unwrap_or("guest.elf");
-            let file = match fs::File::open(&elf_path) {
-                Ok(f) => f,
-                Err(e) => { eprintln!("Failed to open ELF file: {}", e); std::process::exit(1); }
-            };
+            // let client = reqwest::blocking::Client::new();
+            // let file_name = elf_path.file_name().and_then(|s| s.to_str()).unwrap_or("guest.elf");
+            // let file = match fs::File::open(&elf_path) {
+            //     Ok(f) => f,
+            //     Err(e) => { eprintln!("Failed to open ELF file: {}", e); std::process::exit(1); }
+            // };
 
-            let part = reqwest::blocking::multipart::Part::reader(file)
-                .file_name(file_name.to_string())
-                .mime_str("application/octet-stream").unwrap();
+            // let part = reqwest::blocking::multipart::Part::reader(file)
+            //     .file_name(file_name.to_string())
+            //     .mime_str("application/octet-stream").unwrap();
 
-            let form = reqwest::blocking::multipart::Form::new()
-                .text("model_id", model_id.to_string())
-                .text("hashValue", hash_value)
-                .part("elf_file", part);
+            // let form = reqwest::blocking::multipart::Form::new()
+            //     .text("model_id", model_id.to_string())
+            //     .text("hashValue", hash_value)
+            //     .part("elf_file", part);
 
-            match client.post(endpoint)
-                .header(AUTHORIZATION, format!("Bearer {}", auth.access_token))
-                .multipart(form)
-                .send() {
-                Ok(resp) => {
-                    let status = resp.status();
-                    match resp.text() {
-                        Ok(body) => {
-                            if status.is_success() { pretty_print_validation_request(&body); std::process::exit(0); }
-                            else { eprintln!("Request failed ({}): {}", status, body); std::process::exit(1); }
-                        }
-                        Err(e) => { eprintln!("Failed to read response body: {}", e); std::process::exit(1); }
-                    }
-                }
-                Err(e) => { eprintln!("HTTP request error: {}", e); std::process::exit(1); }
-            }
+            // match client.post(endpoint)
+            //     .header(AUTHORIZATION, format!("Bearer {}", auth.access_token))
+            //     .multipart(form)
+            //     .send() {
+            //     Ok(resp) => {
+            //         let status = resp.status();
+            //         match resp.text() {
+            //             Ok(body) => {
+            //                 if status.is_success() { pretty_print_validation_request(&body); std::process::exit(0); }
+            //                 else { eprintln!("Request failed ({}): {}", status, body); std::process::exit(1); }
+            //             }
+            //             Err(e) => { eprintln!("Failed to read response body: {}", e); std::process::exit(1); }
+            //         }
+            //     }
+            //     Err(e) => { eprintln!("HTTP request error: {}", e); std::process::exit(1); }
+            // }
         }
         Some(("register", sub_m)) => {
             let email = sub_m

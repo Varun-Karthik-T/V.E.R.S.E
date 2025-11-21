@@ -1,14 +1,3 @@
-// #![no_main]
-// use risc0_zkvm::guest::env;
-// risc0_zkvm::guest::entry!(main);
-
-// pub fn main() {
-//     // Example: send some validation data to host
-//     let validation_data: Vec<f32> = vec![5.9, 3.0, 5.1, 1.8]; // example iris features
-//     env::commit(&validation_data);
-// }
-
-
 
 #![no_main]
 use risc0_zkvm::guest::env;
@@ -33,3 +22,4 @@ pub fn main() {
     // Commit the validation dataset to the journal
     env::commit(&validation_data);
 }
+

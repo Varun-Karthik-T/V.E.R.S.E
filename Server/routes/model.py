@@ -23,9 +23,7 @@ async def create_new_model(
     return await create_model(model_data, current_user)
 
 @router.get("/",response_model=List[ModelResponse])
-async def get_all_models(
-    current_user: User = Depends(get_current_user)
-):
+async def get_all_models():
     """Get all models for the authenticated user"""
     return await get_all_models_controller()
 

@@ -1,55 +1,3 @@
-// use methods::{GUEST_CODE_FOR_ZK_PROOF_ELF, GUEST_CODE_FOR_ZK_PROOF_ID};
-// use ort::{session::{Session, builder::GraphOptimizationLevel}, value::{Tensor, DynValue}};
-// use risc0_zkvm::{default_prover, ExecutorEnv};
-// use anyhow::Result;
-
-// fn main() -> Result<()> {
-//     // Step 1: Run guest to get validation data
-//     let env = ExecutorEnv::builder().build()?;
-//     let prover = default_prover();
-//     let session = prover.prove(env, GUEST_CODE_FOR_ZK_PROOF_ELF)?;
-
-//     // Extract validation data from guest
-//     let validation_data: Vec<f32> = session.receipt.journal.decode()?;
-//     println!("Received validation data from guest: {:?}", validation_data);
-
-//     // Step 2: Load ONNX model
-//     let mut model = Session::builder()?
-//         .with_optimization_level(GraphOptimizationLevel::Level3)?
-//         .commit_from_file("iris_tree_model.onnx")?;
-
-//     // Step 3: Prepare input tensor
-//     let shape = [1usize, 4usize];
-//     let input_tensor = Tensor::from_array((shape, validation_data.clone().into_boxed_slice()))?;
-
-//     // Step 4: Run inference
-//     let mut outputs = model.run(ort::inputs!["float_input" => input_tensor])?;
-
-//     let label_value: DynValue = outputs.remove("output_label").unwrap();
-//     let prob_value: DynValue = outputs.remove("output_probability").unwrap();
-
-//     // ✅ Extract label tensor values safely
-//     let predicted_indices = label_value.try_extract_array::<i64>()?;
-//     let predicted_index = predicted_indices[0] as usize;
-
-//     // Map predicted index to Iris class
-//     let iris_classes = ["Iris-setosa", "Iris-versicolor", "Iris-virginica"];
-//     let predicted_class = iris_classes
-//         .get(predicted_index)
-//         .unwrap_or(&"Unknown class");
-
-//     println!("Predicted label index: {}", predicted_index);
-//     println!("Predicted class: {}", predicted_class);
-//     println!("Probability vector: {:?}", prob_value);
-
-//     // Step 5: Verify proof for guest data authenticity
-//     session.receipt.verify(GUEST_CODE_FOR_ZK_PROOF_ID)?;
-//     println!("✅ Guest data verified via ZK proof");
-
-//     Ok(())
-// }
-
-
 
 use methods::{GUEST_CODE_FOR_ZK_PROOF_ELF, GUEST_CODE_FOR_ZK_PROOF_ID};
 use ort::{
@@ -61,7 +9,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Sample {
+struct Sample { 
     features: Vec<f32>,
     expected: i64,
 }
@@ -136,3 +84,4 @@ fn main() -> Result<()> {
 
     Ok(())
 }
+
