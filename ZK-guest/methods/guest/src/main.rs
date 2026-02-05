@@ -203,6 +203,7 @@ fn get_dataset() -> Vec<(Vec<f32>, f32)> {
     ]
 }
 
+
 // ------------------ Guest Entry ------------------
 risc0_zkvm::guest::entry!(main);
 
